@@ -1,71 +1,40 @@
 const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const ffmpeg = require('fluent-ffmpeg');
+const fs = require('fs');
 const path = require('path');
-const cors = require('cors');
+const app = express();
 
-const app = express(); 
-app.use(cors());
-const server = http.createServer(app);
-const io = socketIo(server,{
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST'],
-        allowHeaders: ['my-custom-header'],
-        credentials: true
-    }
+app.get('/video', function(req, res) {
+  const path = 'movie.mp4';
+  const stat = fs.statSync(path);
+  const fileSize = stat.size;
+  const range = req.headers.range;
 
-});
-const videoPath = path.join(__dirname,'movie.mp4');
-console.log(videoPath);
-const PORT = 3000;
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize-1;
+    const chunksize = (end-start)+1;
+    const file = fs.createReadStream(path, {start, end});
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
+    };
 
-let currentTimestamp = 0;
-let clients = [];
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+    };
 
-const startStreaming = () => {
-    const stream = ffmpeg(videoPath)
-        .format('flv')
-        .on('start', () => {
-            console.log('Streaming started');
-        })
-        .on('codecData', (data) => {
-            console.log('Input is ' + data.audio + ' audio ' +
-                'with ' + data.video + ' video');
-        })
-        .on('end', () => {
-            console.log('Streaming ended');
-        })
-        .on('error', (err) => {
-            console.log('Error: ' + err.message);
-        });
-    
-    stream.pipe() // Pipe the output of the ffmpeg stream to the response object with the correct headers
-        .on('data', (chunk) => { // chunk is a Buffer that contains the encoded video data for the current frame
-            currentTimestamp += 1;
-            io.emit('video', chunk);
-        });
-
-    setInterval(() => {
-        currentTimestamp += 1; // Increment the current timestamp every second
-        io.emit('currentTimestamp', currentTimestamp);
-    }, 1000);
-};
-
-io.on('connection', (socket) => {
-    console.log('New client connected');
-    clients.push(socket);
-    
-    socket.emit('currentTimestamp', currentTimestamp);
-
-    socket.on('disconnect', () => {
-        console.log('Client disconnected');
-        clients = clients.filter(client => client !== socket);
-    });
+    res.writeHead(200, head);
+    fs.createReadStream(path).pipe(res);
+  }
 });
 
-server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    startStreaming();
+app.listen(3000, function () {
+  console.log('Listening on port 3000!');
 });
